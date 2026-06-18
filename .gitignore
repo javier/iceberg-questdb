@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local Iceberg SqlCatalog (sqlite) — generated at runtime, never commit
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

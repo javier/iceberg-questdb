@@ -1,0 +1,9 @@
+# Tested 2026-06 with: pyiceberg 0.10.0, pyarrow 20.0.0, sqlalchemy 2.0.51, boto3 1.42.97
+#
+# questdb_to_iceberg.py patches PyIceberg's add_files internals
+# (parquet_path_to_id_mapping, parquet_file_to_data_file), so keep PyIceberg on
+# the 0.10.x line: a newer minor may relocate what the shims reach into.
+pyiceberg~=0.10.0
+pyarrow>=14          # PyIceberg FileIO + reading the QuestDB Parquet schema
+sqlalchemy>=2.0      # required by PyIceberg's SqlCatalog
+boto3>=1.34          # S3 listing + AWS credential resolution
