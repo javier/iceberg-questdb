@@ -106,6 +106,40 @@ derives from the returned `AwsCredentials`; nothing else needs to change. The
 `token` is `None` for static (non-STS) keys, and the catalog props omit the
 session-token key in that case.
 
+## Catalogs: SQLite by default, any PyIceberg catalog optionally
+
+Both scripts default to a local SQLite (`sql`) catalog, but the catalog is
+pluggable via PyIceberg's `load_catalog`. The same flags work on
+`questdb_to_iceberg.py` and `iceberg_reader.py`:
+
+- `--catalog-type` — `sql` (default), `rest`, `glue`, `hive`, `dynamodb`,
+  `in-memory`.
+- `--catalog-name` — the catalog name (also resolves a matching `~/.pyiceberg.yaml`
+  entry, so you can keep all settings in config and pass nothing else).
+- `--catalog-prop KEY=VALUE` — repeatable; passed straight through and **overrides**
+  the convenience flags. This is how non-sql catalogs get their connection and auth.
+
+Your current flow is unchanged: with no extra flags it is exactly the SQLite + S3
+setup. To point at a REST catalog instead (e.g. Polaris, Unity, Lakekeeper, Nessie,
+S3 Tables):
+
+```bash
+python iceberg_reader.py --catalog-type rest \
+  --catalog-prop uri=https://my-catalog \
+  --catalog-prop credential=CLIENT_ID:CLIENT_SECRET \
+  --catalog-prop warehouse=my_warehouse \
+  --region eu-west-1 --table-details questdb.fx_trades
+```
+
+Catalog auth is per type: REST uses OAuth2 bearer tokens (`token=…` or
+`credential=id:secret` + `oauth2-server-uri=…`) or AWS SigV4 (`rest.sigv4-enabled=true`);
+Glue/DynamoDB use AWS IAM; SQL uses the database's own auth. That is **separate**
+from **storage** auth (reading the data files in S3), which the scripts inject from
+`get_aws_credentials`. If your REST catalog does credential vending (hands back
+scoped, temporary S3 credentials per table), the reader can skip its own S3 creds
+with `--no-aws`. The registration tool always reads S3 directly, so it always needs
+storage credentials.
+
 ## QuestDB Parquet is Iceberg-compatible out of the box
 
 QuestDB's cold-storage Parquet registers zero-copy with **stock PyIceberg — no

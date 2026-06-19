@@ -38,7 +38,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import pyiceberg.io.pyarrow as _pyi
-from pyiceberg.catalog.sql import SqlCatalog
+from pyiceberg.catalog import load_catalog
 from pyiceberg.transforms import HourTransform
 
 
@@ -100,7 +100,7 @@ def pyarrow_s3(creds, region):
 
 
 def catalog_s3_props(creds, region):
-    """PyIceberg SqlCatalog S3 properties built from the returned credentials."""
+    """PyIceberg S3 storage properties built from the returned credentials."""
     props = {
         "s3.access-key-id": creds.access_key,
         "s3.secret-access-key": creds.secret_key,
@@ -109,6 +109,29 @@ def catalog_s3_props(creds, region):
     if creds.token:  # omit for static (non-STS) keys
         props["s3.session-token"] = creds.token
     return props
+
+
+def build_catalog(args, creds):
+    """Build any PyIceberg catalog, defaulting to the local sql (SQLite) flow.
+
+    The catalog backend is whatever `--catalog-type` says (sql, rest, glue, hive,
+    dynamodb); `--catalog-prop KEY=VALUE` (repeatable) passes arbitrary properties
+    and overrides the convenience flags, so a REST catalog works with its own auth:
+
+        --catalog-type rest --catalog-prop uri=https://my-catalog \
+            --catalog-prop credential=CLIENT_ID:CLIENT_SECRET
+
+    The data always lives in S3, so S3 storage credentials are always injected. With
+    no extra props this is exactly the original SQLite + S3 behaviour.
+    """
+    props = dict(p.split("=", 1) for p in args.catalog_prop)
+    props.setdefault("type", args.catalog_type)
+    if props.get("type") == "sql":
+        props.setdefault("uri", args.catalog_db)
+    props.setdefault("warehouse", args.warehouse)
+    if "s3.access-key-id" not in props:
+        props.update(catalog_s3_props(creds, args.region))
+    return load_catalog(args.catalog_name, **props)
 
 
 def schema_has_ns_timestamp(schema):
@@ -177,7 +200,11 @@ def parse_args():
     p.add_argument("--sso-profile", default=None, help="AWS SSO profile for `aws sso login` (defaults to --profile)")
     p.add_argument("--namespace", default="questdb", help="Iceberg namespace; table name is inferred from the QuestDB prefix (e.g. questdb.market_data)")
     p.add_argument("--warehouse", required=True, help="Iceberg warehouse URI for table metadata, e.g. s3://my-iceberg-bucket/warehouse (keep separate from the data bucket)")
-    p.add_argument("--catalog-db", default="sqlite:///iceberg_catalog.db", help="SqlCatalog metadata DB URI")
+    p.add_argument("--catalog-type", default="sql", help="catalog type: sql (default), rest, glue, hive, dynamodb")
+    p.add_argument("--catalog-name", default="iceberg", help="catalog name (also resolves a matching ~/.pyiceberg.yaml entry)")
+    p.add_argument("--catalog-prop", action="append", default=[], metavar="KEY=VALUE",
+                   help="extra catalog property, repeatable; overrides convenience flags (e.g. uri=…, credential=id:secret)")
+    p.add_argument("--catalog-db", default="sqlite:///iceberg_catalog.db", help="sql catalog DB URI (maps to the catalog `uri` for --catalog-type sql)")
     p.add_argument("--ts-col", default="timestamp", help="designated timestamp column to partition by hour()")
     p.add_argument("--rebuild", action="store_true", help="drop and re-register from scratch (default: incremental)")
     p.add_argument("--sample-rows", type=int, default=5, help="rows to pull for the read-back check (0 to skip)")
@@ -211,12 +238,7 @@ def main():
         print("note: source has nanosecond timestamps; Iceberg has no ns type here, "
               "downcasting to microseconds (sub-us precision is dropped, data stays in place)")
 
-    catalog = SqlCatalog(
-        "iceberg",
-        uri=args.catalog_db,
-        warehouse=args.warehouse,
-        **catalog_s3_props(creds, args.region),
-    )
+    catalog = build_catalog(args, creds)
     catalog.create_namespace_if_not_exists(args.namespace)
 
     if args.rebuild and catalog.table_exists(identifier):

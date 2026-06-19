@@ -33,7 +33,11 @@ exactly that against any catalog, registering nothing.
 
 - **Python** — see [`python/`](python/) ([python/README.md](python/README.md))
   for setup, usage, and the QuestDB ↔ PyIceberg compatibility notes. Downcasts
-  nanosecond timestamps to microseconds and registers UUIDs as `fixed[16]`.
+  nanosecond timestamps to microseconds and registers UUIDs as `fixed[16]`. The
+  catalog is pluggable (SQLite by default, or REST/Glue/Hive) via
+  `--catalog-type`/`--catalog-prop`, and there's a read-only
+  [`iceberg_reader.py`](python/iceberg_reader.py) (`--list` / `--table` /
+  `--table-details`) for inspecting any catalog.
 - **Java** — see [`java/`](java/) ([java/README.md](java/README.md)). The Iceberg
   reference implementation, so it keeps **native nanosecond timestamps** (v3) and
   **native UUIDs**. Choose `--timestamp-mode v2` (broad compatibility) or `v3`
