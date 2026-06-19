@@ -1,5 +1,10 @@
 # QuestDB cold storage → Apache Iceberg (zero-copy, Java)
 
+> [!NOTE]
+> This is an **example of manual QuestDB to Apache Iceberg integration**, not a
+> production-hardened tool. For full context and the recommended workflow, see the
+> QuestDB guide: https://questdb.com/docs/tutorials/questdb-to-iceberg/
+
 Java port of the Python cookbook. Same job: register QuestDB's S3 cold-storage
 Parquet as an Iceberg table **without copying or rewriting any data**, partitioned
 by `hour(timestamp)`, incremental on re-run. The only writes are Iceberg metadata

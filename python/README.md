@@ -1,5 +1,10 @@
 # QuestDB cold storage → Apache Iceberg (zero-copy)
 
+> [!NOTE]
+> This is an **example of manual QuestDB to Apache Iceberg integration**, not a
+> production-hardened tool. For full context and the recommended workflow, see the
+> QuestDB guide: https://questdb.com/docs/tutorials/questdb-to-iceberg/
+
 Register QuestDB's S3 cold-storage Parquet as an Apache Iceberg table **without
 copying or rewriting any data**. PyIceberg's `add_files` writes only Iceberg
 metadata (manifests) that point at the Parquet files already in your bucket, and

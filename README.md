@@ -1,5 +1,11 @@
 # iceberg-questdb
 
+> [!NOTE]
+> This repository is an **example of manual QuestDB to Apache Iceberg
+> integration**, not a production-hardened tool. For full context and the
+> recommended workflow, see the QuestDB guide:
+> https://questdb.com/docs/tutorials/questdb-to-iceberg/
+
 Register QuestDB's S3 cold-storage Parquet as an [Apache Iceberg](https://iceberg.apache.org/)
 table **without copying or rewriting any data** (zero-copy). Iceberg metadata is
 written to point at the Parquet files QuestDB already exported, so the same data
