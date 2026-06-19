@@ -123,12 +123,29 @@ the source:
 
 ## Nanosecond timestamps (the one adaptation)
 
-QuestDB can store `TIMESTAMP_NS`. Iceberg has no nanosecond type before spec v3,
-and this PyIceberg release cannot *write* v3 metadata yet
-([apache/iceberg-python#1551](https://github.com/apache/iceberg-python/issues/1551)),
-so a native-ns table is not an option today.
+QuestDB can store `TIMESTAMP_NS`. Iceberg's support for nanoseconds is worth being
+precise about, because the limitation lives at two different layers:
 
-When the source has ns timestamps, the script **downcasts them to microseconds**:
+- **The Iceberg spec.** Format versions **v1 and v2 are microsecond-only** —
+  `timestamp` / `timestamptz` are defined at µs precision, so nanoseconds are
+  genuinely unrepresentable there. Format **v3 added nanosecond types**
+  (`timestamp_ns` / `timestamptz_ns`), so the spec itself now supports ns.
+- **PyIceberg.** It already defines the type classes (`TimestampNanoType`,
+  `TimestamptzNanoType`) but **cannot _write_ v3 metadata yet**
+  ([apache/iceberg-python#1551](https://github.com/apache/iceberg-python/issues/1551));
+  creating a `format-version=3` table raises `NotImplementedError: Writing V3 is
+  not yet supported`.
+
+So the thing blocking a native-ns table **today is PyIceberg, not the spec**: the
+spec allows ns as of v3, but this PyIceberg release can't write v3. (PyIceberg's
+runtime message *"Iceberg does not yet support 'ns' timestamp precision"* is a bit
+misleading — read it as "this v2 write path doesn't support ns.") Even once
+PyIceberg ships v3 writes, you'd also want your query engines
+(Trino / Spark / Athena / DuckDB) to support v3 ns reads before relying on it.
+
+That makes downcasting to microseconds the pragmatic choice for now, on the
+broadly supported v2 format. When the source has ns timestamps, the script
+**downcasts them to microseconds**:
 the Iceberg column becomes `timestamptz` (µs) while the underlying Parquet is left
 untouched (still zero-copy), and reads downcast on the fly. The only cost is
 sub-microsecond precision. The script detects this from the file schema, enables
