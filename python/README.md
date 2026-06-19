@@ -106,33 +106,57 @@ derives from the returned `AwsCredentials`; nothing else needs to change. The
 `token` is `None` for static (non-STS) keys, and the catalog props omit the
 session-token key in that case.
 
-## Two QuestDB ↔ PyIceberg `add_files` compatibility shims
+## QuestDB Parquet is Iceberg-compatible out of the box
 
-QuestDB's Parquet is valid and reads fine in Athena, DuckDB, Spark and
-PyIceberg's own reader. Two quirks bite **only** PyIceberg's `add_files` path, so
-the script patches PyIceberg internals **scoped to the `add_files` call** via the
-`questdb_add_files_compat()` context manager (originals restored on exit).
+QuestDB's cold-storage Parquet registers zero-copy with **stock PyIceberg — no
+monkeypatching**. Three things that used to need workarounds are now correct at
+the source:
 
-1. **Nested-list element naming.** QuestDB serializes `list<list<double>>` with
-   element nodes named `list`, so the leaf path is `bids.list.list.list.element`.
-   `add_files` builds a name→field-id map that hardcodes the Parquet-canonical
-   `list.element`, so the lookup misses. This is a PyIceberg `add_files`
-   limitation, not a QuestDB defect — Iceberg's real identity mechanism is field
-   IDs, not element names, and every reader matches the list structurally. The
-   shim routes the unmapped leaf to its column's field id. (Iceberg discards
-   min/max for nested types anyway and keeps only counts.)
+- **List elements are canonically named.** Nested `list<list<double>>` columns
+  serialize as `bids.list.element.list.element`, the Parquet-canonical layout
+  PyIceberg's `add_files` expects, so nested columns map cleanly.
+- **No embedded Parquet field IDs.** Files carry no `PARQUET:field_id`, so
+  PyIceberg assigns its own (1-based) IDs and `add_files` accepts the files.
+- **min/max column statistics are present.** The designated timestamp has
+  footer stats, so `add_files` infers the `hour(timestamp)` partition value
+  directly — no need to parse the partition out of the Hive path.
 
-2. **No min/max column statistics.** QuestDB writes Parquet with
-   `has_min_max=False` on every column, including the designated timestamp. So
-   `add_files` cannot infer the `hour(timestamp)` partition value from the footer
-   and emits a null partition, which crashes the Avro manifest writer. Since the
-   data is already Hive-partitioned to the hour and each file holds exactly one
-   hour, the shim reads the partition value straight from the `year=/month=/day=/
-   hour=` path. (This missing-stats gap also costs Athena/DuckDB row-group
-   skipping on data-column predicates.)
+## Nanosecond timestamps (the one adaptation)
 
-The clean long-term fix for #1 is upstream: PyIceberg `add_files` matching nested
-columns by field ID (as its read path does) instead of by hardcoded name. Until
-then, the shims are the price of doing this zero-copy, which is a hard
-requirement here — the only patch-free alternative is to rewrite all the data
-through Iceberg's writer, which abandons the whole "cold storage stays put" goal.
+QuestDB can store `TIMESTAMP_NS`. Iceberg has no nanosecond type before spec v3,
+and this PyIceberg release cannot *write* v3 metadata yet
+([apache/iceberg-python#1551](https://github.com/apache/iceberg-python/issues/1551)),
+so a native-ns table is not an option today.
+
+When the source has ns timestamps, the script **downcasts them to microseconds**:
+the Iceberg column becomes `timestamptz` (µs) while the underlying Parquet is left
+untouched (still zero-copy), and reads downcast on the fly. The only cost is
+sub-microsecond precision. The script detects this from the file schema, enables
+`PYICEBERG_DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE` (so `create_table` downcasts),
+and — because `add_files` ignores that flag in its schema-compatibility check —
+forces the downcast there via the small `ns_downcast_compat()` context manager,
+scoped to the `add_files` call (original restored on exit). Microsecond tables
+take this path as a no-op.
+
+## UUID columns land as `fixed[16]` (for now)
+
+QuestDB stores UUIDs (e.g. `trade_id`, `order_id`) as a 16-byte fixed column and
+writes the Parquet **`UUID` logical type** on it — which is exactly how Iceberg
+encodes its own `uuid` type (`fixed_len_byte_array(16)` + UUID logical type). So
+the bytes on disk are already a valid Iceberg `uuid` column; QuestDB is doing the
+right thing.
+
+The catch is the read toolchain, not the data. pyarrow (tested on 20.0.0) reads
+the column back as plain `fixed_size_binary[16]` and does not promote the UUID
+logical type to its `pa.uuid()` extension, so PyIceberg infers Iceberg `fixed[16]`
+and the values display as binary. Forcing the table schema to `uuid` does not help
+yet: `create_table` accepts it, but `add_files` then fails with
+`ArrowNotImplementedError: extension` because the UUID extension is not wired
+through PyIceberg's add_files path in this release.
+
+This is harmless and lossless — the 16 bytes *are* the UUID, the column stays
+zero-copy and queryable, and you can format it to the canonical
+`8-4-4-4-12` string in the query engine. No workaround is added here on purpose:
+because QuestDB already writes the correct UUID logical type, the column will map
+to Iceberg `uuid` automatically, with no script changes, once pyarrow surfaces the
+logical type as `pa.uuid()` on read (or PyIceberg matures its extension handling).

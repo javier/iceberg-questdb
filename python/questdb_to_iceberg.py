@@ -11,37 +11,35 @@ every file; later runs register only files not already in the table (so you can
 re-run after QuestDB writes a new hourly partition). Use --rebuild to drop and
 re-register from scratch. Dropping never touches the S3 data, only the catalog.
 
-Two QuestDB-specific quirks bite PyIceberg's `add_files` path *only*; both are
-handled by `questdb_add_files_compat()` and scoped to the `add_files` call:
+QuestDB's cold-storage Parquet is Iceberg-compatible out of the box: canonically
+named list elements, no embedded Parquet field IDs, and min/max column statistics
+(so add_files infers the hour(timestamp) partition straight from the footer). No
+monkeypatching of PyIceberg is needed for that.
 
-  1. Nested list<list<double>> columns (the order book) serialize with their
-     element nodes named 'list' rather than the canonical 'element', so the leaf
-     path is 'bids.list.list.list.element'. `add_files` builds a name-based
-     path->field-id map keyed on 'element', so that lookup misses. This is a
-     PyIceberg `add_files` limitation, not a QuestDB defect: the files are valid
-     Parquet and read correctly in Athena, DuckDB, Spark and PyIceberg's own
-     reader, none of which depend on the element node name.
-
-  2. QuestDB writes no min/max column statistics, so `add_files` cannot infer the
-     hour(timestamp) partition value from the footer and emits a null partition,
-     which then crashes the Avro manifest writer. The data is already
-     Hive-partitioned to the hour in the S3 path and each file holds exactly one
-     hour, so we read the partition value from the path instead.
+The one adaptation is nanosecond timestamps. QuestDB can store TIMESTAMP_NS, but
+Iceberg has no nanosecond type until spec v3, which this PyIceberg release cannot
+*write* yet (apache/iceberg-python#1551). So when the source has ns timestamps we
+downcast them to microseconds: the Iceberg column becomes timestamptz(us) while
+the underlying Parquet stays untouched (still zero-copy), and reads downcast on
+the fly. The only cost is sub-microsecond precision. PyIceberg's add_files does
+not thread its downcast-on-write flag into the schema-compatibility check, so we
+force it there via the small `ns_downcast_compat()` context manager, scoped to the
+add_files call.
 """
 import argparse
-import re
+import logging
+import os
 import subprocess
 from collections import namedtuple
-from contextlib import contextmanager
-from datetime import datetime, timezone
+from contextlib import contextmanager, nullcontext
 
 import boto3
+import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import pyiceberg.io.pyarrow as _pyi
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.transforms import HourTransform
-from pyiceberg.typedef import Record
 
 
 # ===========================================================================
@@ -113,59 +111,30 @@ def catalog_s3_props(creds, region):
     return props
 
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
-_HIVE_HOUR = re.compile(r"year=(\d+)/month=(\d+)/day=(\d+)/hour=(\d+)")
-
-
-def hour_partition_value(file_path):
-    """Iceberg hour(timestamp) value (hours since epoch) read from a Hive path."""
-    m = _HIVE_HOUR.search(file_path)
-    if not m:
-        raise ValueError(f"no year=/month=/day=/hour= partition in {file_path}")
-    y, mo, d, h = (int(x) for x in m.groups())
-    dt = datetime(y, mo, d, h, tzinfo=timezone.utc)
-    return int((dt - _EPOCH).total_seconds()) // 3600
+def schema_has_ns_timestamp(schema):
+    """True if any column is a nanosecond timestamp (Iceberg has no ns type)."""
+    return any(pa.types.is_timestamp(f.type) and f.type.unit == "ns" for f in schema)
 
 
 @contextmanager
-def questdb_add_files_compat():
-    """Patch PyIceberg's add_files internals for QuestDB Parquet, then restore.
+def ns_downcast_compat():
+    """Make add_files accept ns timestamps by downcasting them to us.
 
-    Scoped to the `with` block so we never leave PyIceberg globals mutated for
-    the rest of the process. See the module docstring for the why.
+    create_table honours PYICEBERG_DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE on its
+    own, but add_files' schema-compatibility check ignores that flag, so we wrap
+    it to force the downcast. Scoped to the `with` block, original restored on
+    exit. No-op effect on microsecond tables.
     """
-    orig_mapping = _pyi.parquet_path_to_id_mapping
-    orig_p2d = _pyi.parquet_file_to_data_file
+    orig = _pyi._check_pyarrow_schema_compatible
 
-    def tolerant_mapping(schema):
-        # Route a nested-list leaf ('bids.list.list.list.element') to its
-        # top-level column's field id. There is one leaf under each order-book
-        # column, so this resolves to the correct element field id; Iceberg
-        # drops min/max for nested types anyway and keeps only counts.
-        base = orig_mapping(schema)
+    def patched(requested_schema, provided_schema, downcast_ns_timestamp_to_us=False, format_version=2):
+        return orig(requested_schema, provided_schema, downcast_ns_timestamp_to_us=True, format_version=format_version)
 
-        class _M(dict):
-            def __missing__(self, key):
-                top = key.split(".", 1)[0]
-                for path, fid in base.items():
-                    if path == top or path.startswith(top + "."):
-                        return fid
-                raise KeyError(key)
-
-        return _M(base)
-
-    def data_file_with_path_partition(io, table_metadata, file_path):
-        data_file = orig_p2d(io, table_metadata, file_path)
-        data_file[3] = Record(hour_partition_value(file_path))  # _data[3] = partition
-        return data_file
-
-    _pyi.parquet_path_to_id_mapping = tolerant_mapping
-    _pyi.parquet_file_to_data_file = data_file_with_path_partition
+    _pyi._check_pyarrow_schema_compatible = patched
     try:
         yield
     finally:
-        _pyi.parquet_path_to_id_mapping = orig_mapping
-        _pyi.parquet_file_to_data_file = orig_p2d
+        _pyi._check_pyarrow_schema_compatible = orig
 
 
 def table_name_from_prefix(prefix):
@@ -188,13 +157,13 @@ def list_parquet_files(s3, bucket, prefix):
     return sorted(files)
 
 
-def register_new_files(tbl, files):
+def register_new_files(tbl, files, downcast_ns):
     """Zero-copy add only the files not already registered. Returns the count."""
     registered = {task.file.file_path for task in tbl.scan().plan_files()}
     new_files = [f for f in files if f not in registered]
     print(f"{len(registered)} files already registered, {len(new_files)} new")
     if new_files:
-        with questdb_add_files_compat():
+        with (ns_downcast_compat() if downcast_ns else nullcontext()):
             tbl.add_files(new_files)  # zero-copy register, no rewrite
     return len(new_files)
 
@@ -226,6 +195,22 @@ def main():
     if not files:
         raise SystemExit("No files matched. Check --bucket/--prefix.")
 
+    # Read one file's schema up front: needed to create the table, and to detect
+    # nanosecond timestamps (which Iceberg cannot represent and must downcast).
+    pa_s3 = pyarrow_s3(creds, args.region)
+    with pa_s3.open_input_file(files[0].replace("s3://", "")) as f:
+        file_schema = pq.read_schema(f)
+
+    downcast_ns = schema_has_ns_timestamp(file_schema)
+    if downcast_ns:
+        os.environ["PYICEBERG_DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE"] = "true"
+        # PyIceberg logs the downcast as a warning for every ns value it touches
+        # (per file on register, per batch on read). We downcast on purpose, so
+        # mute that one logger and print a single note instead.
+        logging.getLogger("pyiceberg.io.pyarrow").setLevel(logging.ERROR)
+        print("note: source has nanosecond timestamps; Iceberg has no ns type here, "
+              "downcasting to microseconds (sub-us precision is dropped, data stays in place)")
+
     catalog = SqlCatalog(
         "iceberg",
         uri=args.catalog_db,
@@ -241,20 +226,17 @@ def main():
     if catalog.table_exists(identifier):
         # incremental: add only the partitions that appeared since last run
         tbl = catalog.load_table(identifier)
-        added = register_new_files(tbl, files)
+        added = register_new_files(tbl, files, downcast_ns)
         print("nothing to do; table is up to date" if not added else f"registered {added} new files")
     else:
         # first run: derive schema from a file, create the table, register all
-        pa_s3 = pyarrow_s3(creds, args.region)
-        with pa_s3.open_input_file(files[0].replace("s3://", "")) as f:
-            schema = pq.read_schema(f)
         print("\n--- file schema ---")
-        print(schema)
+        print(file_schema)
 
-        tbl = catalog.create_table(identifier, schema=schema)
+        tbl = catalog.create_table(identifier, schema=file_schema)
         with tbl.update_spec() as us:
             us.add_field(args.ts_col, HourTransform())
-        with questdb_add_files_compat():
+        with (ns_downcast_compat() if downcast_ns else nullcontext()):
             tbl.add_files(files)  # zero-copy register, no rewrite
         print(f"created {identifier} and registered {len(files)} files")
 
