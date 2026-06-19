@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.questdb.iceberg</groupId>
+  <artifactId>questdb-to-iceberg</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <iceberg.version>1.11.0</iceberg.version>
+    <awssdk.version>2.31.0</awssdk.version>
+    <parquet.version>1.17.1</parquet.version>
+    <hadoop.version>3.4.1</hadoop.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${awssdk.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- Iceberg core + parquet metrics + generic reader for the read-back check -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-core</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-parquet</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-data</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <!-- iceberg-data's format registry expects all format models present at runtime -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-orc</artifactId>
+      <version>${iceberg.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+    <!-- S3FileIO + bundled AWS SDK used by Iceberg at runtime -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-aws</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-aws-bundle</artifactId>
+      <version>${iceberg.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- AWS SDK v2: our own S3 client for listing, plus SSO for profile auth -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sso</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>ssooidc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sts</artifactId>
+    </dependency>
+
+    <!-- Parquet footer reading for schema inference (needs hadoop Configuration on the classpath) -->
+    <dependency>
+      <groupId>org.apache.parquet</groupId>
+      <artifactId>parquet-hadoop</artifactId>
+      <version>${parquet.version}</version>
+    </dependency>
+    <!-- parquet-hadoop's ParquetReadOptions.builder() references a mapreduce class -->
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-mapreduce-client-core</artifactId>
+      <version>${hadoop.version}</version>
+      <exclusions>
+        <exclusion><groupId>org.apache.hadoop</groupId><artifactId>hadoop-yarn-common</artifactId></exclusion>
+        <exclusion><groupId>org.apache.hadoop</groupId><artifactId>hadoop-yarn-client</artifactId></exclusion>
+        <exclusion><groupId>org.apache.hadoop</groupId><artifactId>hadoop-hdfs-client</artifactId></exclusion>
+        <exclusion><groupId>org.apache.hadoop</groupId><artifactId>hadoop-annotations</artifactId></exclusion>
+        <exclusion><groupId>com.google.protobuf</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.avro</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>io.netty</groupId><artifactId>*</artifactId></exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-common</artifactId>
+      <version>${hadoop.version}</version>
+      <exclusions>
+        <exclusion><groupId>org.apache.hadoop</groupId><artifactId>hadoop-auth</artifactId></exclusion>
+        <exclusion><groupId>org.eclipse.jetty</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>com.sun.jersey</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.zookeeper</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.curator</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.kerby</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.avro</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>com.google.protobuf</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>dnsjava</groupId><artifactId>dnsjava</artifactId></exclusion>
+      </exclusions>
+    </dependency>
+
+    <!-- Local JDBC catalog backend (the SqlCatalog analogue) -->
+    <dependency>
+      <groupId>org.xerial</groupId>
+      <artifactId>sqlite-jdbc</artifactId>
+      <version>3.49.1.0</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>2.0.16</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>questdb-to-iceberg</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>io.questdb.iceberg.QuestDbToIceberg</mainClass>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -222,3 +222,7 @@ __marimo__/
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Java build output
+*.class
+dependency-reduced-pom.xml
