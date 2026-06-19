@@ -57,14 +57,15 @@ def parse_args():
     p.add_argument("--sso-profile", default=None, help="AWS SSO profile for `aws sso login`")
     p.add_argument("--list", action="store_true", help="list all namespace.table identifiers")
     p.add_argument("--table", default=None, help="identifier to sample, e.g. questdb.fx_trades")
+    p.add_argument("--table-details", default=None, help="identifier to describe: location, schema, partitions")
     p.add_argument("--sample-rows", type=int, default=5, help="rows to pull when --table is given")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    if not args.list and not args.table:
-        raise SystemExit("nothing to do: pass --list or --table NS.NAME")
+    if not args.list and not args.table and not args.table_details:
+        raise SystemExit("nothing to do: pass --list, --table NS.NAME, or --table-details NS.NAME")
 
     creds = get_aws_credentials(args.profile, args.sso_profile)
     props = {"uri": args.catalog_db, **catalog_s3_props(creds, args.region)}
@@ -77,6 +78,23 @@ def main():
         for ns in catalog.list_namespaces():
             for ident in catalog.list_tables(ns):
                 print("  " + ".".join(ident))
+
+    if args.table_details:
+        tbl = catalog.load_table(tuple(args.table_details.split(".")))
+        print(f"\n--- {args.table_details} ---")
+        print("format-version:", tbl.metadata.format_version)
+        print("location:", tbl.location())
+        print("metadata-location:", tbl.metadata_location)
+        print("\nschema:")
+        print(tbl.schema())
+        print("\npartition spec:")
+        print(tbl.spec())
+        parts = tbl.inspect.partitions()
+        keep = [c for c in ["partition", "record_count", "file_count",
+                            "total_data_file_size_in_bytes", "last_updated_at"]
+                if c in parts.column_names]
+        print(f"\nregistered partitions ({parts.num_rows}):")
+        print(parts.select(keep) if keep else parts)
 
     if args.table:
         ident = tuple(args.table.split("."))

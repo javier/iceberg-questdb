@@ -202,7 +202,17 @@ python iceberg_reader.py --catalog-db sqlite:///iceberg_catalog.db --region YOUR
 # schema + a few rows from one table (prints the format-version too)
 python iceberg_reader.py --catalog-db sqlite:///iceberg_catalog.db --region YOUR_REGION \
   --table questdb.fx_trades --sample-rows 5
+
+# catalog-side details only (no data scan): location, schema, every registered partition
+python iceberg_reader.py --catalog-db sqlite:///iceberg_catalog.db --region YOUR_REGION \
+  --table-details questdb.fx_trades
 ```
 
-It registers nothing and writes nothing; it only needs the catalog URI (and AWS
-credentials to read the metadata + data from S3).
+`--table-details` prints the table location and metadata pointer, the schema and
+partition spec, and the full partition list straight from the manifests
+(`inspect.partitions()`) — each partition with its record count, file count and
+size. The partition value is the raw catalog value (for `hour(timestamp)`, the hour
+ordinal = hours since epoch). It reads only metadata, not data files.
+
+All three modes register nothing and write nothing; they only need the catalog URI
+(and AWS credentials to read metadata + data from S3).
