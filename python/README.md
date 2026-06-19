@@ -49,8 +49,18 @@ Key flags (`--help` for all): `--bucket`, `--prefix`, `--region`, `--warehouse`
 The Iceberg **table name is inferred from the QuestDB prefix** — QuestDB
 cold-storage prefixes end in `table_name~version`, so
 `cold_storage/market_data~699` yields table `market_data`. `--namespace` (default
-`questdb`) is prepended, giving `questdb.market_data`. The table name itself is
-not configurable; it always tracks QuestDB's.
+`questdb`) is prepended, and a **`_v2` suffix is always appended**, giving
+`questdb.market_data_v2`. The table name itself is not configurable; it always
+tracks QuestDB's.
+
+**Why the `_v2` suffix?** This Python tool always registers the
+microsecond / format-version-2 view (it downcasts nanosecond timestamps — see
+below). The suffix marks that explicitly and, crucially, keeps every Python table
+distinct from a **Java-written v3 table** of the same name (`questdb.fx_trades` v3
+vs `questdb.fx_trades_v2`) so the two can live in the **same shared catalog**
+without ever colliding — PyIceberg and the Java `JdbcCatalog` interoperate over one
+SQLite file. Register with Java for the lossless v3 view, with Python for the
+broadly compatible `_v2` view; both point at the same untouched Parquet.
 
 ## Incremental registration vs. Athena partition projection
 

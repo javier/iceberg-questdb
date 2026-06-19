@@ -4,7 +4,10 @@ PyIceberg `add_files` registers the existing S3 Parquet in place (no rewrite),
 partitioned by hour(timestamp). Bucket, prefix, region, warehouse and auth are all
 required CLI params (nothing site-specific is hardcoded, and the warehouse is
 never assumed to live in the data bucket), so it works against any QuestDB
-cold-storage layout. The Iceberg table name is taken from the prefix.
+cold-storage layout. The Iceberg table name is taken from the prefix, with a
+`_v2` suffix (this tool always writes the microsecond/format-version-2 view, so the
+suffix keeps it distinct from a Java-written v3 table of the same name in a shared
+catalog).
 
 Runs are incremental by default: the first run creates the table and registers
 every file; later runs register only files not already in the table (so you can
@@ -198,7 +201,7 @@ def parse_args():
     p.add_argument("--region", required=True, help="AWS region of the bucket")
     p.add_argument("--profile", default="default", help="AWS profile name (see get_aws_credentials)")
     p.add_argument("--sso-profile", default=None, help="AWS SSO profile for `aws sso login` (defaults to --profile)")
-    p.add_argument("--namespace", default="questdb", help="Iceberg namespace; table name is inferred from the QuestDB prefix (e.g. questdb.market_data)")
+    p.add_argument("--namespace", default="questdb", help="Iceberg namespace; table name is inferred from the QuestDB prefix with a _v2 suffix (e.g. questdb.market_data_v2)")
     p.add_argument("--warehouse", required=True, help="Iceberg warehouse URI for table metadata, e.g. s3://my-iceberg-bucket/warehouse (keep separate from the data bucket)")
     p.add_argument("--catalog-type", default="sql", help="catalog type: sql (default), rest, glue, hive, dynamodb")
     p.add_argument("--catalog-name", default="iceberg", help="catalog name (also resolves a matching ~/.pyiceberg.yaml entry)")
@@ -213,7 +216,11 @@ def parse_args():
 
 def main():
     args = parse_args()
-    identifier = f"{args.namespace}.{table_name_from_prefix(args.prefix)}"
+    # This Python tool always registers the v2 (microsecond) view, so it suffixes
+    # every table with _v2. That keeps it distinct from a Java-written v3 table of
+    # the same name in a shared catalog (e.g. questdb.fx_trades_v2 vs the Java
+    # questdb.fx_trades), so the two never collide regardless of source type.
+    identifier = f"{args.namespace}.{table_name_from_prefix(args.prefix)}_v2"
 
     creds = get_aws_credentials(args.profile, args.sso_profile)
 
