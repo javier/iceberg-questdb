@@ -15,12 +15,19 @@ There are two implementations, Python and Java. They do the same zero-copy
 registration; the difference is data-type fidelity:
 
 - For **microsecond** timestamps, either version works.
-- For **nanosecond** timestamps (Iceberg v3 `timestamp_ns`), use **Java**. Iceberg
-  added nanoseconds in format-version 3, and only the Java reference implementation
-  can currently write v3 — PyIceberg cannot, so the Python version downcasts ns to
-  microseconds. If you need lossless nanoseconds, Java is the one that works.
-- UUIDs are native in **Java** (Iceberg `uuid`); Python registers them as
-  `fixed[16]`.
+- For **nanosecond** timestamps (Iceberg v3 `timestamp_ns`), **register with Java**.
+  Iceberg added nanoseconds in format-version 3, and only the Java reference
+  implementation can currently *write* v3 — PyIceberg cannot, so the Python
+  *registration* tool downcasts ns to microseconds.
+- UUIDs are native in **Java** (Iceberg `uuid`); the Python registration tool
+  records them as `fixed[16]`.
+
+**Reading is not limited the same way.** PyIceberg's v3 gap is write-only: it
+*reads* a Java-created v3 table with full fidelity — `timestamp_ns` comes back as
+nanosecond-precise timestamps and `uuid` as a real UUID type. So a good pattern is
+**register once with Java (v3), then query from anywhere**, Python included. The
+minimal read-only helper `python/iceberg_reader.py` (`--list` / `--table`) does
+exactly that against any catalog, registering nothing.
 
 ## Implementations
 

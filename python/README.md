@@ -143,6 +143,13 @@ misleading — read it as "this v2 write path doesn't support ns.") Even once
 PyIceberg ships v3 writes, you'd also want your query engines
 (Trino / Spark / Athena / DuckDB) to support v3 ns reads before relying on it.
 
+**PyIceberg's v3 gap is write-only — it _reads_ v3 fine.** Verified: a v3 table
+created by the Java version (see [`../java/`](../java/)) reads back through
+PyIceberg with `timestamp_ns` as nanosecond-precise `timestamp[ns]` and `uuid` as a
+real `arrow.uuid` extension. So if you want lossless nanoseconds, register once with
+Java and query from Python (or anywhere). The read-only helper `iceberg_reader.py`
+below does this against any catalog.
+
 That makes downcasting to microseconds the pragmatic choice for now, on the
 broadly supported v2 format. When the source has ns timestamps, the script
 **downcasts them to microseconds**:
@@ -177,3 +184,25 @@ zero-copy and queryable, and you can format it to the canonical
 because QuestDB already writes the correct UUID logical type, the column will map
 to Iceberg `uuid` automatically, with no script changes, once pyarrow surfaces the
 logical type as `pa.uuid()` on read (or PyIceberg matures its extension handling).
+
+Note this is a *registration/inference* limitation, not a read one: when a table
+already declares the column as `uuid` (e.g. one created by the Java version),
+PyIceberg **reads** it back as a proper `arrow.uuid` extension.
+
+## Reading any catalog: `iceberg_reader.py`
+
+A second, registration-free script just reads. Point it at a catalog to list every
+table or to sample rows from one — handy for inspecting tables created by either
+implementation, including Java-written v3 tables:
+
+```bash
+# list namespace.table identifiers in a catalog
+python iceberg_reader.py --catalog-db sqlite:///iceberg_catalog.db --region YOUR_REGION --list
+
+# schema + a few rows from one table (prints the format-version too)
+python iceberg_reader.py --catalog-db sqlite:///iceberg_catalog.db --region YOUR_REGION \
+  --table questdb.fx_trades --sample-rows 5
+```
+
+It registers nothing and writes nothing; it only needs the catalog URI (and AWS
+credentials to read the metadata + data from S3).
