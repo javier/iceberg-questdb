@@ -226,3 +226,6 @@ __marimo__/
 # Java build output
 *.class
 dependency-reduced-pom.xml
+
+# Personal, local-only notes
+*.local.md
