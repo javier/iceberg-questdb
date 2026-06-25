@@ -178,9 +178,18 @@ public final class QuestDbToIceberg {
       PartitionSpec spec = PartitionSpec.builderFor(schema).hour(a.tsCol).build();
       Map<String, String> tableProps = new HashMap<>();
       tableProps.put(TableProperties.FORMAT_VERSION, formatVersion);
-      // QuestDB files carry no Iceberg field IDs, so reads must fall back to name mapping.
-      tableProps.put(TableProperties.DEFAULT_NAME_MAPPING, NameMappingParser.toJson(MappingUtil.create(schema)));
       table = catalog.createTable(id, schema, spec, tableProps);
+      // QuestDB files carry no Iceberg field IDs, so reads must fall back to a
+      // name mapping. Build it from the COMMITTED schema (table.schema()), not the
+      // pre-commit `schema`: createTable reassigns fresh field IDs, and the
+      // renumbering hits nested list/map element IDs in particular. A mapping
+      // built from the pre-commit schema would point those nested columns at
+      // stale IDs, so they bind to nothing and read back as all-null (top-level
+      // scalar IDs happen to survive, which is why only nested columns break).
+      table.updateProperties()
+          .set(TableProperties.DEFAULT_NAME_MAPPING,
+              NameMappingParser.toJson(MappingUtil.create(table.schema())))
+          .commit();
       System.out.println("created " + id);
     }
 
