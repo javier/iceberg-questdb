@@ -18,15 +18,13 @@ import os
 
 import duckdb
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--catalog", default=os.path.join(HERE, "questdb_lake.ducklake"),
+    p.add_argument("--catalog", default="questdb_lake.ducklake",
                    help="DuckLake catalog file to read")
-    p.add_argument("--data-path", default=os.path.join(HERE, "ducklake_data"))
-    p.add_argument("--region", default="eu-west-1")
+    p.add_argument("--data-path", default="ducklake_data")
+    p.add_argument("--region", default=None, help="AWS region for S3 (else AWS_DEFAULT_REGION)")
     p.add_argument("--list", action="store_true", help="list tables in the catalog")
     p.add_argument("--table-details", metavar="NAME", help="describe one table: schema + row count")
     p.add_argument("--table", metavar="NAME", help="table to sample / filter")
@@ -41,7 +39,8 @@ def connect(args):
     con.execute("INSTALL ducklake; LOAD ducklake;")
     if "AWS_ACCESS_KEY_ID" in os.environ:  # creds present -> wire up S3 for row reads
         con.execute("INSTALL aws; LOAD aws; INSTALL httpfs; LOAD httpfs;")
-        con.execute(f"CREATE SECRET s3sec (TYPE s3, PROVIDER credential_chain, REGION '{args.region}');")
+        region = f", REGION '{args.region}'" if args.region else ""
+        con.execute(f"CREATE SECRET s3sec (TYPE s3, PROVIDER credential_chain{region});")
     con.execute(f"ATTACH 'ducklake:{args.catalog}' AS lake (DATA_PATH '{args.data_path}');")
     return con
 

@@ -12,7 +12,7 @@ high-level comparison, then the specifics of how each behaves with QuestDB data.
 | Where metadata lives | JSON + Avro manifest files in object storage, plus a catalog pointer | **All** metadata in a SQL database (here a local `.ducklake`/SQLite file; can be Postgres/MySQL) |
 | Catalog | Pluggable (SQLite/JDBC, Glue, REST, Nessie, ...) | The SQL database itself |
 | Engines that read it | Broad: Spark, Trino, Flink, Snowflake, BigQuery, Athena, DuckDB (iceberg ext), ... | DuckDB-centric today (can mirror out to Iceberg) |
-| Write / register model | `add_files` (PyIceberg) or the Java tool; **add-only** | `ducklake_add_data_files`; add and remove file refs as SQL transactions |
+| Write model | append + delete/overwrite, each a new snapshot (manifest set) | append + delete/overwrite, each a SQL transaction |
 | Snapshots / time travel | Yes, via metadata files | Yes, via catalog rows |
 | Ops complexity | More moving parts (manifest files, catalog, compaction) | Simpler: one SQL DB holds everything |
 | Maturity / reach | Battle-tested, wide ecosystem | Newer, simpler, fast to stand up |
@@ -62,13 +62,23 @@ UUID logical type.
 
 ### Partition churn (drop / add)
 
-QuestDB cold storage gains and loses hourly partitions over time.
+QuestDB cold storage gains and loses hourly partitions over time. **Both formats
+support removing data files** (this is not an Iceberg limitation); the difference
+is the mechanism:
 
-- **Iceberg** registration is **add-only**. New partitions need an incremental
-  run; dropped partitions leave dangling manifest references, so reconciling a
-  drop requires a full `--rebuild`.
-- **DuckLake** models data files as catalog rows, so adds and removals are
-  ordinary SQL transactions — no metadata-file rewrite to reconcile a drop.
+- **Iceberg**: a file is deregistered with a `DeleteFiles` snapshot (or an engine
+  `DELETE FROM` / `ALTER TABLE ... DROP PARTITION`), which drops the manifest
+  reference. Metadata only; the S3 object is not deleted. Surgical and cheap.
+- **DuckLake**: file references are catalog rows, but its supported removal paths
+  are snapshot expiry and orphan/compaction cleanup, with no per-file deregister.
+  So dropping a vanished reference is done by re-registering the surviving set.
+
+The two registrars in this repo both reconcile drops with **`--prune`**: a run
+lists S3, adds new files, and removes references to files no longer present -- the
+Java tool via a surgical `DeleteFiles`, the DuckLake tool by re-registering the
+survivors. `--prune` never deletes anything from S3; the vanished objects are
+already gone. `--rebuild` (Java) and `--fresh` (DuckLake catalog) remain the blunt
+full-reset options.
 
 ### Auth / tooling
 

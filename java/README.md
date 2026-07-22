@@ -42,12 +42,34 @@ java -jar java/target/questdb-to-iceberg.jar \
 Flags mirror the Python tool: `--bucket`, `--prefix`, `--region`, `--warehouse`
 (required), plus `--namespace` (default `questdb`), `--catalog-db` (default
 `iceberg_catalog.db`, a local SQLite file; accepts a full `jdbc:` URI too),
-`--ts-col` (default `timestamp`), `--profile`, `--sample-rows`, `--rebuild`, and
-the Java-only `--timestamp-mode` (`v2` default, or `v3`).
+`--ts-col` (default `timestamp`), `--profile`, `--sample-rows`, `--rebuild`,
+`--prune`, and the Java-only `--timestamp-mode` (`v2` default, or `v3`).
 
 The table name is inferred from the prefix (`market_data~699` → `market_data`),
 prefixed by `--namespace`. Re-runs are incremental: only files not already in the
 table are registered.
+
+### Keeping the table in sync: `--prune` and `--rebuild`
+
+Registration is add-only by default, so if QuestDB **drops** cold-storage
+partitions, the table keeps stale references to files that no longer exist. Two
+ways to reconcile that, neither of which touches the Parquet in S3:
+
+- **`--prune`** (surgical, recommended). The run lists what is under the prefix in
+  S3 now, adds the new files, and **deregisters** the ones no longer present - a
+  full add/remove sync in one pass. Deregistering removes only the Iceberg
+  manifest reference via a `DeleteFiles` snapshot; it never deletes an S3 object
+  (they are already gone) and never rewrites data. Cheap: it only removes the
+  vanished entries.
+
+```bash
+java -jar java/target/questdb-to-iceberg.jar --prune \
+  --bucket ... --prefix cold_storage/fx_trades~701 --region ... --warehouse ...
+```
+
+- **`--rebuild`** (blunt). Drops the catalog table and re-registers every current
+  file from scratch. Also reconciles drops, but re-reads every footer; use it for
+  a clean slate or a schema change. Like `--prune`, it never deletes S3 data.
 
 ## AWS authentication
 

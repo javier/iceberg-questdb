@@ -17,4 +17,8 @@ fi
 
 eval "$(aws configure export-credentials --profile "$PROFILE" --format env)"
 
+# also export the profile's region so --region can be omitted by the tools here
+region="$(aws configure get region --profile "$PROFILE")"
+[ -n "$region" ] && export AWS_DEFAULT_REGION="$region"
+
 aws sts get-caller-identity   # sanity check: expect account 337384507863
