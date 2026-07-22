@@ -1,0 +1,9 @@
+# DuckLake tools. Tested 2026-07 with duckdb 1.4.5 (Python) and the duckdb CLI
+# 1.5.3. The aws / httpfs / ducklake extensions auto-install on first run (needs
+# network to the DuckDB extension repository).
+#
+# AWS auth is handled OUTSIDE Python: `source duck_with_aws_credentials.sh` puts
+# temporary creds in the environment (SSO login + aws configure export-credentials),
+# which DuckDB reads via credential_chain. No boto3 here.
+duckdb>=1.4
+pandas>=1.5     # duckdb .df() output in ducklake_register.py

@@ -1,0 +1,5 @@
+# Generated DuckLake catalog + local data path (not source)
+*.ducklake
+*.ducklake.wal
+ducklake_data/
+__pycache__/

@@ -265,3 +265,17 @@ ordinal = hours since epoch). It reads only metadata, not data files.
 
 All three modes register nothing and write nothing; they only need the catalog URI
 (and AWS credentials to read metadata + data from S3).
+
+## Not just Iceberg: DuckLake over the same Parquet
+
+Iceberg is not the only table format that can sit on QuestDB's cold storage. The
+**same untouched Parquet** also takes a **DuckLake** metadata layer (DuckDB
+native), zero-copy, via `ducklake_add_data_files`. Tools live in
+[`ducklake/`](ducklake/): `ducklake_register.py` (register) and
+`ducklake_query.py` (read), plus their own README.
+
+The two formats differ on QuestDB specifics (notably timestamps: Iceberg v3 keeps
+native nanoseconds, DuckLake stores microseconds), but both point at the identical
+files in cold storage without copying anything, so they can coexist over one copy
+of the data. For the full breakdown see
+[`ducklake/ICEBERG_VS_DUCKLAKE.md`](ducklake/ICEBERG_VS_DUCKLAKE.md).
