@@ -18,6 +18,7 @@ import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DataFiles;
+import org.apache.iceberg.DeleteFiles;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.Metrics;
@@ -61,7 +62,9 @@ import software.amazon.awssdk.services.s3.model.S3Object;
  * <p>Mirrors the Python {@code questdb_to_iceberg.py}: it registers existing S3 Parquet in place
  * (no rewrite) via Iceberg's core append API, partitioned by hour(timestamp). Bucket, prefix,
  * region and warehouse are required; nothing site-specific is hardcoded. The table name is taken
- * from the prefix. Runs are incremental by default; {@code --rebuild} drops and re-registers.
+ * from the prefix. Runs are incremental by default (add-only); {@code --prune} also deregisters
+ * files that have vanished from S3 (a metadata-only {@link DeleteFiles} snapshot, no S3 data
+ * touched), and {@code --rebuild} drops and re-registers everything from scratch.
  *
  * <p>Unlike PyIceberg, the Java reference implementation can keep nanosecond timestamps and UUIDs
  * as native Iceberg types:
@@ -193,9 +196,15 @@ public final class QuestDbToIceberg {
       System.out.println("created " + id);
     }
 
-    // 4) incremental zero-copy registration
+    // 4) incremental zero-copy registration (+ optional prune of vanished files)
     int added = registerNewFiles(table, io, files, suppressBounds);
     System.out.println(added == 0 ? "nothing to do; table is up to date" : "registered " + added + " new files");
+    if (a.prune) {
+      // --prune turns the run into a full sync against the current S3 listing: registerNewFiles
+      // already added (S3 - registered); now deregister (registered - S3) so partitions QuestDB
+      // dropped from cold storage stop dangling in the manifest. Metadata only; no S3 data deleted.
+      deregisterMissingFiles(table, files);
+    }
 
     // 5) validation
     table.refresh();
@@ -401,6 +410,39 @@ public final class QuestDbToIceberg {
     return toAdd.size();
   }
 
+  /**
+   * Deregister files that are still in the table metadata but no longer exist under the S3 prefix
+   * (e.g. QuestDB dropped those cold-storage partitions). Removes only the Iceberg manifest
+   * references, via a {@link DeleteFiles} snapshot: it never deletes anything from S3 (the objects
+   * are already gone) and never rewrites data. This is the incremental counterpart to {@code
+   * --rebuild} for reconciling drops - surgical instead of drop-and-recreate.
+   */
+  static int deregisterMissingFiles(Table table, List<String> files) throws IOException {
+    table.refresh();
+    Set<String> present = new HashSet<>(files);
+    List<String> toRemove = new ArrayList<>();
+    try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
+      for (FileScanTask t : tasks) {
+        String path = t.file().path().toString();
+        if (!present.contains(path)) {
+          toRemove.add(path);
+        }
+      }
+    }
+    if (toRemove.isEmpty()) {
+      System.out.println("prune: no registered files missing from S3");
+      return 0;
+    }
+    DeleteFiles delete = table.newDelete();
+    for (String path : toRemove) {
+      delete.deleteFile(path);
+    }
+    delete.commit();
+    System.out.println("prune: deregistered " + toRemove.size()
+        + " files no longer in S3 (metadata only; no S3 data deleted)");
+    return toRemove.size();
+  }
+
   /** Copy of the metrics without lower/upper bounds for the given field ids (counts kept). */
   static Metrics withoutBounds(Metrics m, Set<Integer> ids) {
     Map<Integer, ByteBuffer> lower = m.lowerBounds() == null ? null : new HashMap<>(m.lowerBounds());
@@ -429,6 +471,7 @@ public final class QuestDbToIceberg {
     TsMode mode = TsMode.V2;
     int sampleRows = 5;
     boolean rebuild = false;
+    boolean prune = false;
 
     static Args parse(String[] argv) {
       Args a = new Args();
@@ -446,6 +489,7 @@ public final class QuestDbToIceberg {
           case "--timestamp-mode" -> a.mode = TsMode.valueOf(argv[++i].toUpperCase());
           case "--sample-rows" -> a.sampleRows = Integer.parseInt(argv[++i]);
           case "--rebuild" -> a.rebuild = true;
+          case "--prune" -> a.prune = true;
           default -> {
             System.err.println("unknown argument: " + k);
             System.exit(2);

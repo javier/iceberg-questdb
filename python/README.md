@@ -14,6 +14,12 @@ The dataset is an FX order book: `timestamp`, `symbol`, `bids` and `asks` as
 `list<list<double>>`, plus `best_bid` / `best_ask`, Hive-partitioned to the hour
 (`year=/month=/day=/hour=`).
 
+> [!NOTE]
+> **DuckLake too, not just Iceberg.** The same cold-storage Parquet also takes a
+> zero-copy **DuckLake** layer (DuckDB-native). See [`ducklake/`](ducklake/) for
+> the register/query tools and an
+> [Iceberg vs DuckLake](ducklake/ICEBERG_VS_DUCKLAKE.md) comparison.
+
 ## Requirements
 
 - Python 3.9+

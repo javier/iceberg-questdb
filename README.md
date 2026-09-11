@@ -49,3 +49,15 @@ exactly that against any catalog, registering nothing.
   **native UUIDs**. Choose `--timestamp-mode v2` (broad compatibility) or `v3`
   (lossless ns); the same data can be registered as both at once for
   mixed-capability readers.
+
+## Not just Iceberg: DuckLake
+
+Iceberg is not the only table format that fits QuestDB's cold storage. The **same
+untouched Parquet** also takes a [DuckLake](https://ducklake.select/) layer,
+DuckDB-native and zero-copy, via `ducklake_add_data_files`. Tools live in
+[`python/ducklake/`](python/ducklake/): a registrar (`ducklake_register.py`) and a
+reader (`ducklake_query.py`), with their own [README](python/ducklake/README.md)
+and a side-by-side [Iceberg vs DuckLake](python/ducklake/ICEBERG_VS_DUCKLAKE.md)
+comparison. The tradeoff mirrors the version choice above (Iceberg v3 keeps native
+nanoseconds, DuckLake stores microseconds), but both point at one untouched copy
+of the data and can coexist over it.
