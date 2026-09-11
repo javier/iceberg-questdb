@@ -77,7 +77,36 @@ def connect(args):
     con.execute(f"CREATE SECRET s3sec (TYPE s3, PROVIDER credential_chain{region});")
     os.makedirs(args.data_path, exist_ok=True)
     con.execute(f"ATTACH 'ducklake:{args.catalog}' AS lake (DATA_PATH '{args.data_path}');")
+    protect_source_files(con)
     return con
+
+
+def protect_source_files(con):
+    """Disable DuckLake compaction catalog-wide so it never rewrites QuestDB's Parquet.
+
+    Registering a file transfers its ownership to DuckLake, and compaction
+    (merge_adjacent_files / rewrite_data_files, also fired by CHECKPOINT) would rewrite
+    these files and delete the originals -- data QuestDB is still serving. auto_compact=false
+    disables every rewrite path (merge_adjacent_files, rewrite_data_files, flush_inlined_data,
+    delete_orphaned_files) for all tables here. Set on every run so it survives --fresh (new
+    catalog) and the DROP/recreate in the prune path. It does not gate expire_snapshots +
+    cleanup_old_files, but this script never expires snapshots, so no referenced file can be
+    deleted through it.
+
+    The auto_compact option is only available in newer DuckLake builds. On an older extension
+    it is unsupported; we warn rather than fail, because the real, version-independent guarantee
+    is read-only S3 on the cold-storage bucket (GetObject/ListBucket, deny PutObject/DeleteObject)
+    plus never running DuckLake maintenance / CHECKPOINT against this catalog.
+    """
+    try:
+        con.execute("CALL lake.set_option('auto_compact', false);")
+        print("protection: auto_compact=false (DuckLake will not rewrite/compact these files)")
+    except duckdb.NotImplementedException:
+        print("WARNING: this DuckLake version does not support auto_compact; compaction is NOT "
+              "disabled in-catalog.\n"
+              "         Do NOT run DuckLake maintenance or CHECKPOINT against this catalog, and\n"
+              "         protect the source Parquet with read-only S3 creds on the cold-storage\n"
+              "         bucket (GetObject/ListBucket, deny PutObject/DeleteObject).")
 
 
 def derive_columns(con, root):

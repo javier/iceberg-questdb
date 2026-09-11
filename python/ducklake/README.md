@@ -24,6 +24,13 @@ pip install -r requirements.txt
 The `aws`, `httpfs`, and `ducklake` DuckDB extensions auto-install on first run
 (needs network to the DuckDB extension repository).
 
+Use **DuckDB 1.5 or newer** (Python 3.10+). The register script switches off
+DuckLake compaction on the catalog with the `auto_compact` option, which exists
+from DuckLake 0.4 / DuckDB 1.5 onwards; see
+[Keeping the source Parquet read-only](#keeping-the-source-parquet-read-only).
+On an older build the script still runs and simply skips that step with a note,
+but the catalog it writes with 1.5+ is DuckLake format version 1.0.
+
 ## AWS credentials
 
 Auth is handled outside Python. Source the wrapper to put temporary creds for
@@ -76,6 +83,78 @@ default (git-ignored). Point any DuckDB session at it:
 ATTACH 'ducklake:questdb_lake.ducklake' AS lake;
 SELECT * FROM lake.trades LIMIT 5;
 ```
+
+### How long registration takes, and recovering from an interrupted run
+
+`ducklake_add_data_files` reads **every Parquet footer over S3** to record
+per-file row counts and column stats. Budget roughly **1 second per file**: a
+few hundred partitions is a few **minutes**, and the script prints nothing until
+a table finishes, so a first-time register looks like it hangs when it is just
+grinding through footer reads. This is the DuckLake counterpart to the metrics
+scan the Iceberg tools do. An Iceberg `--prune` that finds nothing new is instant
+only because it adds zero files; a from-scratch DuckLake register of the same
+table pays the full footer-read cost.
+
+Incremental runs are fast: a table that is already populated skips every file
+already in the catalog (`add_data_files` is not idempotent, so re-adding would
+double-count) and only reads footers for genuinely new files.
+
+**You cannot query the catalog while a register (or `--prune`) is running.** The
+local `.ducklake` catalog is a single embedded DuckDB file: one writer, or many
+readers, but not both. A `ducklake_query.py` run started while a registration
+holds the write lock fails with `Could not set lock on file ... Conflicting lock
+is held`. Wait for the registration to finish, then query. For the same reason,
+register one table at a time into a given catalog rather than in parallel.
+
+**If a run is interrupted** (Ctrl-C, or the session is killed) part-way through a
+table, you can be left with the table **declared but with zero or partial files
+registered**, plus a dangling `questdb_lake.ducklake.wal` next to the catalog.
+A later plain run then sees the table already exists and tries to add the missing
+files **one at a time** (the slow per-file path), which is even slower than the
+first run. The clean recovery is to rebuild from scratch:
+
+```bash
+python ducklake_register.py --bucket ... --prefix ... --fresh
+```
+
+`--fresh` deletes the catalog file (and its `.wal`) and re-registers every
+current file through the single fast glob path. When registering more than one
+table into the same catalog, pass `--fresh` on the **first** table only;
+subsequent tables run without it so they add alongside rather than wiping it.
+
+## Keeping the source Parquet read-only
+
+When you register a file, DuckLake records it as one of its own data files.
+Registering and querying only ever **read** the Parquet, so in normal use nothing
+here writes to cold storage. The thing to know is that DuckLake also has optional
+*maintenance* operations, compaction (`merge_adjacent_files`, `rewrite_data_files`)
+and file cleanup (`expire_snapshots` + `cleanup_old_files`, also bundled into a
+single `CHECKPOINT`), which are allowed to rewrite or delete the data files
+DuckLake owns. You simply want QuestDB's files left exactly as it wrote them.
+
+The register script already handles this: it sets `auto_compact = false` on the
+catalog (DuckDB 1.5+/DuckLake 0.4+), globally and persisted, which turns off every
+rewrite path (`merge_adjacent_files`, `rewrite_data_files`, `flush_inlined_data`,
+`delete_orphaned_files`) for all tables in the catalog. With compaction off your
+live partitions are never rewritten, and because the delete path
+(`cleanup_old_files`) only removes files no longer referenced by the table, it
+never has a live file to delete. `--prune` and `--fresh` only ever drop references
+to partitions QuestDB has *already* removed from S3, so they never point the delete
+path at a file that still exists. As used, nothing here touches the Parquet.
+
+This was validated on real files: with `auto_compact = false`, an explicit
+`merge_adjacent_files` and a `CHECKPOINT`, each followed by `expire_snapshots` +
+`cleanup_old_files`, all left the source files byte-for-byte unchanged; with the
+default `auto_compact = true`, the same sequence rewrote and then deleted them.
+
+That makes the tooling safe on its own. As an **optional extra precaution** for
+access that does *not* go through these scripts (a manual `CHECKPOINT`, an older
+client that cannot set `auto_compact`, a future auto-maintenance default, a bug),
+you can also make it structural at the bucket: give the DuckLake credentials
+read-only access to the cold-storage bucket (`s3:GetObject` and `s3:ListBucket`,
+without `s3:PutObject` / `s3:DeleteObject`). Then QuestDB is the only writer and
+every other client, DuckLake included, can only list and read. The same posture
+suits the Iceberg path over the same Parquet.
 
 ## Query
 

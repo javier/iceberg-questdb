@@ -1,9 +1,12 @@
-# DuckLake tools. Tested 2026-07 with duckdb 1.4.5 (Python) and the duckdb CLI
-# 1.5.3. The aws / httpfs / ducklake extensions auto-install on first run (needs
-# network to the DuckDB extension repository).
+# DuckLake tools. Needs duckdb 1.5+ (Python 3.10+): that ships DuckLake 0.4+/1.0,
+# which supports the auto_compact option the register script uses to keep DuckLake
+# from rewriting QuestDB's cold-storage Parquet, and writes DuckLake format v1.0.
+# On duckdb 1.4.x the scripts still run but skip auto_compact and cannot read a
+# v1.0 catalog. The aws / httpfs / ducklake extensions auto-install on first run
+# (needs network to the DuckDB extension repository).
 #
 # AWS auth is handled OUTSIDE Python: `source duck_with_aws_credentials.sh` puts
 # temporary creds in the environment (SSO login + aws configure export-credentials),
 # which DuckDB reads via credential_chain. No boto3 here.
-duckdb>=1.4
+duckdb>=1.5
 pandas>=1.5     # duckdb .df() output in ducklake_register.py
